@@ -1,0 +1,11 @@
+# expect-fail: integration/Integration tests
+name: i03-go-integration
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  go:
+    uses: ./.github/workflows/go.yml
+    with:
+      working-directory: testdata/go/integration-fail
+      integration-command: go test -tags=integration ./...

@@ -1,0 +1,10 @@
+# expect-fail: unit/Unit tests
+name: u06-go-race
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  go:
+    uses: ./.github/workflows/go.yml
+    with:
+      working-directory: testdata/go/race-fail

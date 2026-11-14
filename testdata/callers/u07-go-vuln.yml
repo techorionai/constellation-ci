@@ -1,0 +1,10 @@
+# expect-fail: vulncheck/govulncheck
+name: u07-go-vuln
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  go:
+    uses: ./.github/workflows/go.yml
+    with:
+      working-directory: testdata/go/vuln-fail

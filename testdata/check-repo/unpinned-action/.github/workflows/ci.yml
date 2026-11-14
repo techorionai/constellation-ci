@@ -1,0 +1,15 @@
+name: Fixture
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+jobs:
+  fixture:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: echo ok

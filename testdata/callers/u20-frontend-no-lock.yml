@@ -1,0 +1,10 @@
+# expect-fail: frontend/Check lock file
+name: u20-frontend-no-lock
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  frontend:
+    uses: ./.github/workflows/frontend.yml
+    with:
+      working-directory: testdata/frontend/no-lock
