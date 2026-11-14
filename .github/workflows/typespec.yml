@@ -1,0 +1,50 @@
+name: TypeSpec
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Folder of the TypeSpec project
+        type: string
+        default: .
+      node-version:
+        description: Node.js version
+        type: string
+        default: "26"
+      generate-command:
+        description: Command that makes the generated files
+        type: string
+        default: npx tsp compile .
+
+permissions:
+  contents: read
+
+jobs:
+  typespec:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+      - name: Install dependencies
+        run: npm ci
+      - name: Generate
+        env:
+          GENERATE_COMMAND: ${{ inputs.generate-command }}
+        run: eval "$GENERATE_COMMAND"
+      - name: Check generated files
+        run: |
+          changes=$(git status --porcelain -- . ':(exclude)node_modules')
+          if [ -n "$changes" ]; then
+            echo "The generated files are not current:"
+            echo "$changes"
+            exit 1
+          fi
