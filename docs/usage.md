@@ -20,6 +20,9 @@ Each workflow has the permission `contents: read`. No workflow accepts secrets. 
 | `go-version-file` | `go.mod` | Go version source, relative to `working-directory`. |
 | `unit-command` | `go test -race ./...` | Unit test command. |
 | `integration-command` | empty | Integration test command. If the input is empty, the `integration` job is skipped. |
+| `integration-timeout-minutes` | `30` | Time limit of the `integration` job in minutes. |
+
+Each job has a time limit (`timeout-minutes`): `lint` 15, `unit` 30, `integration` 30 (set by the input), and `vulncheck` 15. The TypeSpec workflow has 15 and the frontend workflow has 30.
 
 Jobs:
 
@@ -32,7 +35,11 @@ Integration tests can use testcontainers. The runner has Docker. Put the integra
 
 ### Lint configuration
 
-The `lint` job uses the shared `golangci-lint` configuration of `config/golangci.yml`. If the `working-directory` has its own configuration file, the job uses that file and not the shared configuration. The accepted names are `.golangci.yml`, `.golangci.yaml`, `.golangci.toml`, and `.golangci.json`.
+The `lint` job uses the shared `golangci-lint` configuration of `config/golangci.yml`. If the project has its own configuration file, the job uses that file and not the shared configuration. The job looks for the file in the `working-directory` and then in each parent folder, up to the root of the checked-out repository. The first file that the job finds is used. The accepted names are `.golangci.yml`, `.golangci.yaml`, `.golangci.toml`, and `.golangci.json`. Thus a file at the repository root is used when the `working-directory` is a subfolder.
+
+### Inputs are fixed strings
+
+The jobs run the inputs `unit-command`, `integration-command`, and `generate-command` as shell commands. Thus the value of an input must be a fixed string in the caller workflow. Never put event data in an input, for example `${{ github.head_ref }}` or `${{ github.event.pull_request.title }}`. A person who controls that data can run commands in the job. `scripts/check-repo.sh` rejects `${{ github.` in the `with:` values of a job.
 
 ### Caller example
 
