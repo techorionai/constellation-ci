@@ -78,14 +78,14 @@ jobs:
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Check this repository
-        run: scripts/check-repo.sh .
+        run: bash scripts/check-repo.sh .
       - name: Check the bad fixtures
         run: |
           status=0
           for dir in testdata/check-repo/*/; do
             dir=${dir%/}
             code=0
-            output=$(scripts/check-repo.sh "$dir" 2>&1) || code=$?
+            output=$(bash scripts/check-repo.sh "$dir" 2>&1) || code=$?
             if [ "$code" -eq 0 ]; then
               echo "FAIL  $dir: the script passed, but it must fail"
               status=1
@@ -112,11 +112,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh extension install nektos/gh-act --pin v0.2.97
       - name: Run the cases that must fail
-        run: scripts/self-test.sh testdata/callers
+        run: bash scripts/self-test.sh testdata/callers
       - name: Check that a wrong step is found
         run: |
           code=0
-          output=$(scripts/self-test.sh testdata/self-test-wrong-step 2>&1) || code=$?
+          output=$(bash scripts/self-test.sh testdata/self-test-wrong-step 2>&1) || code=$?
           echo "$output"
           if [ "$code" -eq 0 ]; then
             echo "The script must exit with a non-zero code for a wrong step."
