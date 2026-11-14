@@ -46,7 +46,7 @@ for caller in "$folder"/*.yml; do
 
   # The act log has the line "[<caller job>/<workflow>/<job>] ... Failure - Main <step> [<time>]".
   if awk -v job="$job" -v step="$step" '
-    index($0, "/" job " ") > 0 && index($0, "Failure - Main " step " [") > 0 { found = 1 }
+    (index($0, "/" job " ") > 0 || index($0, "/" job "]") > 0) && index($0, "Failure - Main " step " [") > 0 { found = 1 }
     END { exit found ? 0 : 1 }' "$log"; then
     echo "PASS  $name: failed at $job/$step"
   else
