@@ -33,18 +33,37 @@ run_actionlint() {
 run_actionlint $workflows
 
 for file in $workflows; do
-  # Top-level permissions: contents read, and no write permission.
+  # Top-level permissions: contents read.
   if ! grep -qE '^permissions:' "$file"; then
     fail "$file: no top-level permissions"
   else
     block=$(awk '/^permissions:/ { print; inb = 1; next } inb && /^[^ #]/ { exit } inb { print }' "$file")
-    if printf '%s\n' "$block" | grep -qE 'write'; then
-      fail "$file: top-level permissions have a write permission"
-    fi
     if ! printf '%s\n' "$block" | grep -qE 'contents: read'; then
       fail "$file: top-level permissions do not have 'contents: read'"
     fi
   fi
+
+  # No write permission at the top level or in a job. Comments do not count.
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    fail "$file:${entry%%:*}: ${entry#*:} permissions have a write permission"
+  done < <(awk '
+    {
+      line = $0
+      sub(/#.*/, "", line)
+      match(line, /^ */); ind = RLENGTH
+      if (inb && line !~ /^ *$/ && ind <= pind) inb = 0
+      if (line ~ /^ *permissions:/) {
+        pind = ind; inb = 1
+        level = (ind == 0) ? "top-level" : "job-level"
+        chk = line; sub(/^ *permissions:/, "", chk)
+      } else if (inb) {
+        chk = line
+      } else {
+        next
+      }
+      if (chk ~ /(^|[ :{,])write(-all)?([ ,}]|$)/) print NR ":" level
+    }' "$file")
 
   # Each checkout step has persist-credentials: false.
   missing=$(awk '
@@ -59,7 +78,7 @@ for file in $workflows; do
         if ((isdash && ind <= stepind) || (!isdash && ind < stepind)) stepend()
         else if ($0 ~ /persist-credentials: false/) pending = 0
       }
-      if ($0 ~ /uses: *actions\/checkout@/) {
+      if ($0 ~ /uses: *["\047]?actions\/checkout@/) {
         pending = 1; pending_line = NR; stepind = isdash ? ind : ind - 2
       }
     }
@@ -77,14 +96,51 @@ for file in $workflows; do
     fail "$file: workflow_call has a secrets block"
   fi
 
-  # Each non-local action has a full commit SHA.
+  # No pull_request_target trigger and no inherited secrets.
+  while IFS= read -r line; do
+    fail "$file:${line%%:*}: pull_request_target is not allowed"
+  done < <(grep -nE '^[^#]*pull_request_target' "$file" || true)
+  while IFS= read -r line; do
+    fail "$file:${line%%:*}: 'secrets: inherit' is not allowed"
+  done < <(grep -nE '^[^#]*secrets:[[:space:]]*inherit' "$file" || true)
+
+  # Each job that runs on a runner has timeout-minutes.
+  while IFS= read -r job; do
+    fail "$file: job '$job' has no timeout-minutes"
+  done < <(awk '
+    function finish() { if (job != "" && runs && !timeout) print job }
+    /^[^ #]/ { if (injobs) finish(); injobs = ($0 ~ /^jobs:/); job = ""; next }
+    !injobs { next }
+    /^  [A-Za-z_][A-Za-z0-9_-]*:/ { finish(); job = $1; sub(/:$/, "", job); runs = 0; timeout = 0; next }
+    /^    runs-on:/ { runs = 1 }
+    /^    timeout-minutes:/ { timeout = 1 }
+    END { if (injobs) finish() }' "$file")
+
+  # A caller job passes fixed strings only. No event data in the with: values.
+  while IFS= read -r line; do
+    fail "$file:$line: a 'with:' value of a job uses event data (\${{ github.* }})"
+  done < <(awk '
+    {
+      match($0, /^ */); ind = RLENGTH
+      if (inw && $0 !~ /^ *$/ && ind <= 4) inw = 0
+      if ($0 ~ /^    with:/) { inw = 1; next }
+      if (inw && $0 ~ /\$\{\{ *github\./) print NR
+    }' "$file")
+
+  # Each non-local action has a full commit SHA. A docker:// action has a sha256 digest.
   while IFS= read -r entry; do
     line=${entry%%:*}
     ref=${entry#*:}
     ref=${ref#*uses:}
-    ref=$(echo "$ref" | sed -E 's/#.*//; s/^ +//; s/ +$//')
+    ref=$(echo "$ref" | sed -E "s/#.*//; s/^ +//; s/ +\$//; s/^[\"']//; s/[\"']\$//")
     case "$ref" in
-      ./* | docker://*) continue ;;
+      ./*) continue ;;
+      docker://*)
+        if ! echo "$ref" | grep -qE '@sha256:[0-9a-f]{64}$'; then
+          fail "$file:$line: '$ref' is not pinned to a sha256 digest"
+        fi
+        continue
+        ;;
     esac
     if ! echo "$ref" | grep -qE '@[0-9a-f]{40}$'; then
       fail "$file:$line: '$ref' is not pinned to a full commit SHA"
