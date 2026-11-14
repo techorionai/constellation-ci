@@ -19,6 +19,10 @@ on:
         description: Integration test command. Empty means no integration job.
         type: string
         default: ""
+      integration-timeout-minutes:
+        description: Time limit of the integration job in minutes
+        type: number
+        default: 30
 
 permissions:
   contents: read
@@ -26,6 +30,7 @@ permissions:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -52,11 +57,23 @@ jobs:
       - name: Select lint configuration
         id: config
         run: |
+          # Look for a configuration file in the working directory and in each parent
+          # folder up to the workspace root. The first match wins.
           own=false
-          for name in .golangci.yml .golangci.yaml .golangci.toml .golangci.json; do
-            if [ -f "$name" ]; then
-              own=true
+          root=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          dir=$(pwd -P)
+          while :; do
+            for name in .golangci.yml .golangci.yaml .golangci.toml .golangci.json; do
+              if [ -f "$dir/$name" ]; then
+                echo "Found the lint configuration $dir/$name"
+                own=true
+                break
+              fi
+            done
+            if [ "$own" = true ] || [ "$dir" = "$root" ] || [ "$dir" = / ]; then
+              break
             fi
+            dir=$(dirname "$dir")
           done
           if [ "$own" = true ]; then
             echo "The module has its own lint configuration."
@@ -80,6 +97,7 @@ jobs:
 
   unit:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -101,6 +119,7 @@ jobs:
   integration:
     if: inputs.integration-command != ''
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.integration-timeout-minutes }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -121,6 +140,7 @@ jobs:
 
   vulncheck:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
