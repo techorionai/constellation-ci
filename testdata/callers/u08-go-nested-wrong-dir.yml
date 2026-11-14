@@ -1,0 +1,10 @@
+# expect-fail: lint/Set up Go
+name: u08-go-nested-wrong-dir
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  go:
+    uses: ./.github/workflows/go.yml
+    with:
+      working-directory: testdata/go/nested

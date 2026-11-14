@@ -6,7 +6,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: read # No write scope
 
 jobs:
   go-pass:
@@ -28,6 +28,11 @@ jobs:
     uses: ./.github/workflows/go.yml
     with:
       working-directory: testdata/go/lint-override-yaml
+
+  go-lint-override-parent:
+    uses: ./.github/workflows/go.yml
+    with:
+      working-directory: testdata/go/lint-override-parent/sub
 
   go-integration-pg:
     uses: ./.github/workflows/go.yml
@@ -63,6 +68,7 @@ jobs:
 
   check-repo:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -79,6 +85,11 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Check this repository
         run: bash scripts/check-repo.sh .
+      - name: Check the good fixtures
+        run: |
+          for dir in testdata/check-repo-pass/*/; do
+            bash scripts/check-repo.sh "${dir%/}"
+          done
       - name: Check the bad fixtures
         run: |
           status=0
@@ -102,6 +113,7 @@ jobs:
   must-fail:
     if: vars.SELF_TEST_LOCAL != 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -109,8 +121,18 @@ jobs:
           persist-credentials: false
       - name: Install act
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh extension install nektos/gh-act --pin v0.2.97
+          # gh needs a token value to start, but a local install makes no API call.
+          # Thus the step gets a placeholder and not the workflow token.
+          GH_TOKEN: unused
+          GH_ACT_SHA256: 3bfe7761eced9e3de6e9a8146897bcbdf4bdc44fcb43c2493f0d652e8d25d182
+        run: |
+          # Download the release asset, check its SHA-256, and install it from a local folder.
+          dir="$RUNNER_TEMP/gh-act"
+          mkdir -p "$dir"
+          curl -fsSL -o "$dir/gh-act" https://github.com/nektos/gh-act/releases/download/v0.2.97/linux-amd64
+          echo "$GH_ACT_SHA256  $dir/gh-act" | sha256sum -c -
+          chmod +x "$dir/gh-act"
+          (cd "$dir" && gh extension install .)
       - name: Run the cases that must fail
         run: bash scripts/self-test.sh testdata/callers
       - name: Check that a wrong step is found
@@ -126,11 +148,13 @@ jobs:
 
   result:
     if: always()
+    timeout-minutes: 10
     needs:
       - go-pass
       - go-nested
       - go-lint-override-yml
       - go-lint-override-yaml
+      - go-lint-override-parent
       - go-integration-pg
       - go-integration-valkey
       - typespec-current
