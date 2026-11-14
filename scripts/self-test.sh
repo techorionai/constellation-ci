@@ -4,15 +4,22 @@
 # Usage: scripts/self-test.sh <folder>
 set -euo pipefail
 
-# Runner image of the act runs. A new digest comes with a new release of constellation-ci.
-RUNNER_IMAGE='ghcr.io/catthehacker/ubuntu@sha256:19619a010b204f44c5340bff7d39b68551109fe6a56a53f75201ea91e05d4270'
+# The file .actrc in the repository root sets the runner image and the number of parallel jobs.
+# The script runs from the repository root, so act reads that file from any start folder.
 
 if [ "$#" -ne 1 ] || [ ! -d "$1" ]; then
   echo "Usage: $0 <folder>" >&2
   exit 2
 fi
 
-folder=$1
+# Resolve the folder to an absolute path, then go to the repository root.
+# The callers use "./.github/workflows/..." references that resolve from the root.
+folder=$(cd "$1" && pwd)
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$root"
+case "$folder" in
+  "$root"/*) folder=${folder#"$root"/} ;;
+esac
 log_dir=$(mktemp -d)
 trap 'rm -rf "$log_dir"' EXIT
 
@@ -35,8 +42,7 @@ for caller in "$folder"/*.yml; do
 
   log="$log_dir/$name.log"
   code=0
-  gh act pull_request -W "$caller" --concurrent-jobs 1 \
-    -P "ubuntu-latest=$RUNNER_IMAGE" > "$log" 2>&1 || code=$?
+  gh act pull_request -W "$caller" > "$log" 2>&1 || code=$?
 
   if [ "$code" -eq 0 ]; then
     echo "FAIL  $name: no failure (expected $job/$step)"
