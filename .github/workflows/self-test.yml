@@ -1,0 +1,172 @@
+name: Self-test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  go-pass:
+    uses: ./.github/workflows/go.yml
+    with:
+      working-directory: testdata/go/pass
+
+  go-nested:
+    uses: ./.github/workflows/go.yml
+    with:
+      working-directory: testdata/go/nested/inner/deep
+
+  go-lint-override-yml:
+    uses: ./.github/workflows/go.yml
+    with:
+      working-directory: testdata/go/lint-override-yml
+
+  go-lint-override-yaml:
+    uses: ./.github/workflows/go.yml
+    with:
+      working-directory: testdata/go/lint-override-yaml
+
+  go-integration-pg:
+    uses: ./.github/workflows/go.yml
+    with:
+      working-directory: testdata/go/integration-pg
+      integration-command: go test -tags=integration ./...
+
+  go-integration-valkey:
+    uses: ./.github/workflows/go.yml
+    with:
+      working-directory: testdata/go/integration-valkey
+      integration-command: go test -tags=integration ./...
+
+  typespec-current:
+    uses: ./.github/workflows/typespec.yml
+    with:
+      working-directory: testdata/typespec/pass-current
+
+  typespec-no-gitignore:
+    uses: ./.github/workflows/typespec.yml
+    with:
+      working-directory: testdata/typespec/pass-no-gitignore
+
+  frontend-npm:
+    uses: ./.github/workflows/frontend.yml
+    with:
+      working-directory: testdata/frontend/pass-npm
+
+  frontend-pnpm:
+    uses: ./.github/workflows/frontend.yml
+    with:
+      working-directory: testdata/frontend/pass-pnpm
+
+  check-repo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26"
+          cache: false
+      - name: Install actionlint
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Check this repository
+        run: scripts/check-repo.sh .
+      - name: Check the bad fixtures
+        run: |
+          status=0
+          for dir in testdata/check-repo/*/; do
+            dir=${dir%/}
+            code=0
+            output=$(scripts/check-repo.sh "$dir" 2>&1) || code=$?
+            if [ "$code" -eq 0 ]; then
+              echo "FAIL  $dir: the script passed, but it must fail"
+              status=1
+            elif ! grep -qF "$(cat "$dir/expect.txt")" <<< "$output"; then
+              echo "FAIL  $dir: the script failed for a wrong reason"
+              echo "$output"
+              status=1
+            else
+              echo "PASS  $dir"
+            fi
+          done
+          exit "$status"
+
+  must-fail:
+    if: vars.SELF_TEST_LOCAL != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install act
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh extension install nektos/gh-act --pin v0.2.97
+      - name: Run the cases that must fail
+        run: scripts/self-test.sh testdata/callers
+      - name: Check that a wrong step is found
+        run: |
+          code=0
+          output=$(scripts/self-test.sh testdata/self-test-wrong-step 2>&1) || code=$?
+          echo "$output"
+          if [ "$code" -eq 0 ]; then
+            echo "The script must exit with a non-zero code for a wrong step."
+            exit 1
+          fi
+          grep -q "wrong step" <<< "$output"
+
+  result:
+    if: always()
+    needs:
+      - go-pass
+      - go-nested
+      - go-lint-override-yml
+      - go-lint-override-yaml
+      - go-integration-pg
+      - go-integration-valkey
+      - typespec-current
+      - typespec-no-gitignore
+      - frontend-npm
+      - frontend-pnpm
+      - check-repo
+      - must-fail
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    env:
+      NEEDS: ${{ toJSON(needs) }}
+      SELF_TEST_LOCAL: ${{ vars.SELF_TEST_LOCAL }}
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUN_ID: ${{ github.run_id }}
+      RUN_ATTEMPT: ${{ github.run_attempt }}
+    steps:
+      - name: Check the results of all jobs
+        run: |
+          status=0
+          while IFS=$'	' read -r name result; do
+            if [ "$result" = success ]; then
+              continue
+            fi
+            if [ "$result" = skipped ] && [ "$name" = must-fail ] && [ "$SELF_TEST_LOCAL" = true ]; then
+              continue
+            fi
+            echo "FAIL  $name: $result"
+            status=1
+          done < <(jq -r 'to_entries[] | [.key, .value.result] | @tsv' <<< "$NEEDS")
+          exit "$status"
+      - name: Check that the integration job of the no-integration case is skipped
+        if: env.SELF_TEST_LOCAL != 'true'
+        run: |
+          conclusion=$(gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs" --paginate             --jq '.jobs[] | select(.name == "go-pass / integration") | .conclusion')
+          echo "Conclusion of go-pass / integration: $conclusion"
+          [ "$conclusion" = skipped ]
