@@ -39,7 +39,7 @@ The `lint` job uses the shared `golangci-lint` configuration of `config/golangci
 
 ### Inputs are fixed strings
 
-The jobs run the inputs `unit-command`, `integration-command`, and `generate-command` as shell commands. Thus the value of an input must be a fixed string in the caller workflow. Never put event data in an input, for example `${{ github.head_ref }}` or `${{ github.event.pull_request.title }}`. A person who controls that data can run commands in the job. `scripts/check-repo.sh` rejects `${{ github.` in the `with:` values of a job.
+The jobs run the inputs `unit-command`, `integration-command`, and `generate-command` as shell commands. Thus the value of an input must be a fixed string in the caller workflow. Never put event data in an input, for example `${{ github.head_ref }}` or `${{ github.event.pull_request.title }}`. A person who controls that data can run commands in the job. `scripts/check-repo.sh` rejects the word `github` (in any letter case) inside any `${{ }}` expression in the `with:` values of a job. This includes flow style values and expressions that continue on the next line.
 
 ### Caller example
 

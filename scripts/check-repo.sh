@@ -51,6 +51,7 @@ for file in $workflows; do
     {
       line = $0
       sub(/#.*/, "", line)
+      gsub(/["\047]/, "", line)
       match(line, /^ */); ind = RLENGTH
       if (inb && line !~ /^ *$/ && ind <= pind) inb = 0
       if (line ~ /^ *permissions:/) {
@@ -116,15 +117,33 @@ for file in $workflows; do
     /^    timeout-minutes:/ { timeout = 1 }
     END { if (injobs) finish() }' "$file")
 
-  # A caller job passes fixed strings only. No event data in the with: values.
+  # A caller job passes fixed strings only. No github context in the with: values.
+  # The check finds the word github inside any ${{ }} expression, in any letter case.
+  # An expression can continue on the next line. A flow style with: value is also checked.
   while IFS= read -r line; do
-    fail "$file:$line: a 'with:' value of a job uses event data (\${{ github.* }})"
+    fail "$file:$line: a 'with:' value of a job uses event data (the github context)"
   done < <(awk '
     {
       match($0, /^ */); ind = RLENGTH
       if (inw && $0 !~ /^ *$/ && ind <= 4) inw = 0
-      if ($0 ~ /^    with:/) { inw = 1; next }
-      if (inw && $0 ~ /\$\{\{ *github\./) print NR
+      if ($0 ~ /^    with:/) inw = 1
+      if (!inw) next
+      rest = tolower($0)
+      sub(/(^| )#.*/, "", rest)
+      hit = 0
+      while (rest != "") {
+        if (!inexpr) {
+          p = index(rest, "${{")
+          if (!p) break
+          rest = substr(rest, p + 3); inexpr = 1
+        } else {
+          p = index(rest, "}}")
+          if (p) { seg = substr(rest, 1, p - 1); rest = substr(rest, p + 2); inexpr = 0 }
+          else { seg = rest; rest = "" }
+          if (seg ~ /(^|[^a-z0-9_-])github([^a-z0-9_-]|$)/) hit = 1
+        }
+      }
+      if (hit) print NR
     }' "$file")
 
   # Each non-local action has a full commit SHA. A docker:// action has a sha256 digest.
