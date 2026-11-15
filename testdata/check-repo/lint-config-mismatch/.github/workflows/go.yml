@@ -1,0 +1,143 @@
+name: Go
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Folder of the Go module
+        type: string
+        default: .
+      go-version-file:
+        description: Go version source, relative to working-directory
+        type: string
+        default: go.mod
+      unit-command:
+        description: Unit test command
+        type: string
+        default: go test -race ./...
+      integration-command:
+        description: Integration test command. Empty means no integration job.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ inputs.working-directory }}/${{ inputs.go-version-file }}
+          cache-dependency-path: ${{ inputs.working-directory }}/go.sum
+      - name: Format check
+        run: |
+          files=$(gofmt -l .)
+          if [ -n "$files" ]; then
+            echo "These files are not formatted:"
+            echo "$files"
+            exit 1
+          fi
+      - name: Go vet
+        run: go vet ./...
+      - name: Select lint configuration
+        id: config
+        run: |
+          own=false
+          for name in .golangci.yml .golangci.yaml .golangci.toml .golangci.json; do
+            if [ -f "$name" ]; then
+              own=true
+            fi
+          done
+          if [ "$own" = true ]; then
+            echo "The module has its own lint configuration."
+            echo "args=" >> "$GITHUB_OUTPUT"
+          else
+            cat > "$RUNNER_TEMP/golangci.yml" <<'GOLANGCI_CONFIG'
+          version: "2"
+          linters:
+            default: standard
+            enable:
+              - misspell
+          GOLANGCI_CONFIG
+            echo "args=-c $RUNNER_TEMP/golangci.yml" >> "$GITHUB_OUTPUT"
+          fi
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+          working-directory: ${{ inputs.working-directory }}
+          args: ${{ steps.config.outputs.args }}
+
+  unit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ inputs.working-directory }}/${{ inputs.go-version-file }}
+          cache-dependency-path: ${{ inputs.working-directory }}/go.sum
+      - name: Unit tests
+        env:
+          UNIT_COMMAND: ${{ inputs.unit-command }}
+        run: eval "$UNIT_COMMAND"
+
+  integration:
+    if: inputs.integration-command != ''
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ inputs.working-directory }}/${{ inputs.go-version-file }}
+          cache-dependency-path: ${{ inputs.working-directory }}/go.sum
+      - name: Integration tests
+        env:
+          INTEGRATION_COMMAND: ${{ inputs.integration-command }}
+        run: eval "$INTEGRATION_COMMAND"
+
+  vulncheck:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ inputs.working-directory }}/${{ inputs.go-version-file }}
+          cache-dependency-path: ${{ inputs.working-directory }}/go.sum
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+      - name: govulncheck
+        run: |
+          GOPATH_BIN="$(go env GOPATH)/bin"
+          export PATH="$PATH:$GOPATH_BIN"
+          govulncheck ./...

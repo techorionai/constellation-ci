@@ -1,0 +1,10 @@
+# expect-fail: frontend/Build
+name: u25-frontend-build
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  frontend:
+    uses: ./.github/workflows/frontend.yml
+    with:
+      working-directory: testdata/frontend/build-fail

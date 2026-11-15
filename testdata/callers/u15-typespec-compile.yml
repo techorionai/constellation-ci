@@ -1,0 +1,10 @@
+# expect-fail: typespec/Generate
+name: u15-typespec-compile
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  typespec:
+    uses: ./.github/workflows/typespec.yml
+    with:
+      working-directory: testdata/typespec/compile-error

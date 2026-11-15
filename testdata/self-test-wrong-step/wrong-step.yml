@@ -1,0 +1,10 @@
+# expect-fail: lint/Format check
+name: wrong-step
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  go:
+    uses: ./.github/workflows/go.yml
+    with:
+      working-directory: testdata/go/vet-fail

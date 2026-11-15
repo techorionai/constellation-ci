@@ -1,0 +1,10 @@
+# expect-fail: lint/golangci-lint
+name: u10-go-shared-lint
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  go:
+    uses: ./.github/workflows/go.yml
+    with:
+      working-directory: testdata/go/lint-fail
