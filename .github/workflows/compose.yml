@@ -1,0 +1,124 @@
+name: Compose
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Folder of the Compose project
+        type: string
+        default: .
+      unit-command:
+        description: Static checks of the Compose files
+        type: string
+        default: bash scripts/check-compose.sh
+      integration-command:
+        description: Smoke test command. Empty means no integration job.
+        type: string
+        default: ""
+      integration-timeout-minutes:
+        description: Time limit of the integration job in minutes
+        type: number
+        default: 30
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install yamllint
+        env:
+          PIPX_HOME: ${{ runner.temp }}/pipx
+          PIPX_BIN_DIR: ${{ runner.temp }}/pipx/bin
+        run: |
+          pipx install yamllint==1.38.0
+          echo "$PIPX_BIN_DIR" >> "$GITHUB_PATH"
+      - name: Install actionlint
+        env:
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          # Download the release file, check its SHA-256, and install the binary.
+          curl -fsSL -o "$RUNNER_TEMP/actionlint.tar.gz" https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "$ACTIONLINT_SHA256  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$HOME/.local/bin" actionlint
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install shellcheck
+        env:
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          # Download the release file, check its SHA-256, and install the binary.
+          curl -fsSL -o "$RUNNER_TEMP/shellcheck.tar.xz" https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          echo "$SHELLCHECK_SHA256  $RUNNER_TEMP/shellcheck.tar.xz" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$HOME/.local/bin" --strip-components=1 shellcheck-v0.11.0/shellcheck
+      - name: YAML lint
+        run: yamllint --strict .
+      - name: Shell lint
+        run: |
+          # List the files with find, because uncommitted files must be checked too.
+          # Check all files before the step ends, so one run shows all failures.
+          found=false
+          failed=false
+          while IFS= read -r -d '' file; do
+            found=true
+            echo "shellcheck $file"
+            if ! shellcheck -x --source-path=SCRIPTDIR "$file"; then
+              failed=true
+            fi
+          done < <(find . -name '*.sh' -not -path './.git/*' -print0)
+          if [ "$found" = false ]; then
+            echo "No shell file found."
+          fi
+          if [ "$failed" = true ]; then
+            echo "Shell lint found errors." >&2
+            exit 1
+          fi
+      - name: Workflow lint
+        # Run at the repository root. actionlint reads .github/workflows/ from there.
+        working-directory: .
+        run: actionlint
+
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Docker Compose version
+        run: docker compose version
+      - name: Unit tests
+        env:
+          UNIT_COMMAND: ${{ inputs.unit-command }}
+        run: eval "$UNIT_COMMAND"
+
+  integration:
+    if: inputs.integration-command != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.integration-timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Integration tests
+        env:
+          INTEGRATION_COMMAND: ${{ inputs.integration-command }}
+        run: eval "$INTEGRATION_COMMAND"

@@ -1,0 +1,10 @@
+# expect-fail: lint/Shell lint
+name: u29-compose-shell-fail
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  compose:
+    uses: ./.github/workflows/compose.yml
+    with:
+      working-directory: testdata/compose/shell-fail

@@ -1,0 +1,10 @@
+# expect-fail: unit/Unit tests
+name: u30-compose-unit-fail
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  compose:
+    uses: ./.github/workflows/compose.yml
+    with:
+      working-directory: testdata/compose/unit-fail
