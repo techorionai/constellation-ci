@@ -3,5 +3,5 @@
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-project=constellation-ci-fixture
+project=constellation-ci-fixture-unit-fail
 docker compose -p "$project" config --quiet
