@@ -36,9 +36,12 @@ jobs:
         with:
           persist-credentials: false
       - name: Install yamllint
+        env:
+          PIPX_HOME: ${{ runner.temp }}/pipx
+          PIPX_BIN_DIR: ${{ runner.temp }}/pipx/bin
         run: |
-          pipx install --force yamllint==1.38.0
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          pipx install yamllint==1.38.0
+          echo "$PIPX_BIN_DIR" >> "$GITHUB_PATH"
       - name: Install actionlint
         env:
           ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
@@ -48,6 +51,7 @@ jobs:
           echo "$ACTIONLINT_SHA256  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum -c -
           mkdir -p "$HOME/.local/bin"
           tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$HOME/.local/bin" actionlint
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Install shellcheck
         env:
           SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
