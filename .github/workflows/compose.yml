@@ -62,14 +62,22 @@ jobs:
       - name: Shell lint
         run: |
           # List the files with find, because uncommitted files must be checked too.
+          # Check all files before the step ends, so one run shows all failures.
           found=false
+          failed=false
           while IFS= read -r -d '' file; do
             found=true
             echo "shellcheck $file"
-            shellcheck "$file"
+            if ! shellcheck -x --source-path=SCRIPTDIR "$file"; then
+              failed=true
+            fi
           done < <(find . -name '*.sh' -not -path './.git/*' -print0)
           if [ "$found" = false ]; then
             echo "No shell file found."
+          fi
+          if [ "$failed" = true ]; then
+            echo "Shell lint found errors." >&2
+            exit 1
           fi
       - name: Workflow lint
         # Run at the repository root. actionlint reads .github/workflows/ from there.
