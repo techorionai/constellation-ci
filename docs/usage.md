@@ -9,6 +9,7 @@ This repository has GitHub reusable workflows for the Constellation repositories
 | `go.yml` | Go modules. Format check, `go vet`, `golangci-lint`, unit tests, integration tests, and `govulncheck`. |
 | `typespec.yml` | TypeSpec projects. Compile, and a check that the generated files are current. |
 | `frontend.yml` | Frontend projects. Install, lint, test, and build. |
+| `compose.yml` | Repositories with Docker Compose files. YAML lint, shell lint, workflow lint, static checks, and a smoke test. |
 
 Each workflow has the permission `contents: read`. No workflow accepts secrets. No workflow has outputs.
 
@@ -22,7 +23,7 @@ Each workflow has the permission `contents: read`. No workflow accepts secrets. 
 | `integration-command` | empty | Integration test command. If the input is empty, the `integration` job is skipped. |
 | `integration-timeout-minutes` | `30` | Time limit of the `integration` job in minutes. |
 
-Each job has a time limit (`timeout-minutes`): `lint` 15, `unit` 30, `integration` 30 (set by the input), and `vulncheck` 15. The TypeSpec workflow has 15 and the frontend workflow has 30.
+Each job has a time limit (`timeout-minutes`): `lint` 15, `unit` 30, `integration` 30 (set by the input), and `vulncheck` 15. The TypeSpec workflow has 15 and the frontend workflow has 30. The Compose workflow has `lint` 15, `unit` 15, and `integration` 30 (set by the input).
 
 Jobs:
 
@@ -109,6 +110,49 @@ jobs:
     uses: techorionai/constellation-ci/.github/workflows/frontend.yml@v0.1.0
     with:
       working-directory: web
+```
+
+## Compose workflow
+
+For repositories that hold Docker Compose files.
+
+| Input | Default | Use |
+| ----- | ------- | --- |
+| `working-directory` | `.` | Folder of the Compose project. |
+| `unit-command` | `bash scripts/check-compose.sh` | Static checks of the Compose files. |
+| `integration-command` | empty | Smoke test command. If the input is empty, the `integration` job is skipped. |
+| `integration-timeout-minutes` | `30` | Time limit of the `integration` job in minutes. |
+
+Jobs:
+
+1. `lint`: installs `yamllint` 1.38.0, `actionlint` 1.7.12, and `shellcheck` 0.11.0. Then it runs `yamllint --strict .` and `shellcheck` on each `*.sh` file in the `working-directory`. Then it runs `actionlint` at the repository root.
+2. `unit`: prints `docker compose version`, then runs the `unit-command`.
+3. `integration`: runs the `integration-command`.
+
+The `lint` and `unit` jobs have a time limit of 15 minutes. The `integration` job has the time limit of the input. The workflow does not start containers. The scripts of the caller start them.
+
+Rules for the caller:
+
+- `yamllint` uses the config file of the caller (`.yamllint`, `.yamllint.yml`, or `.yamllint.yaml`). Without a config file, `yamllint` uses its default rules, and these rules fail on `on:` in workflow files. Thus add a config file. To keep a bad YAML fixture in the repository, add its path to the `ignore:` key of the config file.
+- The `Shell lint` step has no input to exclude a path. Do not commit a `*.sh` file that `shellcheck` rejects. A test that needs a bad shell file makes the file at run time in a temporary folder outside the repository.
+- The `Workflow lint` step runs `actionlint` at the repository root. `actionlint` runs `shellcheck` 0.11.0 on each `run:` script of all workflows of the caller. Thus a `run:` script that `shellcheck` 0.11.0 rejects makes the step fail.
+- Call the scripts through `bash`, for example `bash scripts/smoke-test.sh`. Then the Git file mode of a script has no effect.
+- Each command input is a fixed string. See "Inputs are fixed strings".
+- A Compose file with relative bind mounts (for example `./config:/cfg:ro`) does not work under `act` with a Docker Desktop host. The daemon of the host resolves the mount path, and this path is not the path in the `act` container. For a local test, run the integration command directly on the host. On a GitHub runner, bind mounts work.
+
+```yaml
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  compose:
+    uses: techorionai/constellation-ci/.github/workflows/compose.yml@v0.2.0
+    with:
+      integration-command: bash scripts/smoke-test.sh
 ```
 
 ## Update to a new version
