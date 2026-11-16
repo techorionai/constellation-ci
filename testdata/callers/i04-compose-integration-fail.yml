@@ -1,0 +1,11 @@
+# expect-fail: integration/Integration tests
+name: i04-compose-integration-fail
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  compose:
+    uses: ./.github/workflows/compose.yml
+    with:
+      working-directory: testdata/compose/integration-fail
+      integration-command: bash scripts/smoke-test.sh

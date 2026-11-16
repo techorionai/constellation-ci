@@ -1,0 +1,10 @@
+# expect-fail: lint/YAML lint
+name: u28-compose-yaml-fail
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  compose:
+    uses: ./.github/workflows/compose.yml
+    with:
+      working-directory: testdata/compose/yaml-fail
