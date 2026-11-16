@@ -66,6 +66,17 @@ jobs:
     with:
       working-directory: testdata/frontend/pass-pnpm
 
+  compose-pass:
+    uses: ./.github/workflows/compose.yml
+    with:
+      working-directory: testdata/compose/pass
+      integration-command: bash scripts/smoke-test.sh
+
+  compose-no-integration:
+    uses: ./.github/workflows/compose.yml
+    with:
+      working-directory: testdata/compose/pass
+
   check-repo:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -161,6 +172,8 @@ jobs:
       - typespec-no-gitignore
       - frontend-npm
       - frontend-pnpm
+      - compose-pass
+      - compose-no-integration
       - check-repo
       - must-fail
     runs-on: ubuntu-latest
@@ -188,9 +201,15 @@ jobs:
             status=1
           done < <(jq -r 'to_entries[] | [.key, .value.result] | @tsv' <<< "$NEEDS")
           exit "$status"
-      - name: Check that the integration job of the no-integration case is skipped
+      - name: Check that the integration job of each no-integration case is skipped
         if: env.SELF_TEST_LOCAL != 'true'
         run: |
-          conclusion=$(gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs" --paginate             --jq '.jobs[] | select(.name == "go-pass / integration") | .conclusion')
-          echo "Conclusion of go-pass / integration: $conclusion"
-          [ "$conclusion" = skipped ]
+          status=0
+          for job in "go-pass / integration" "compose-no-integration / integration"; do
+            conclusion=$(gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs" --paginate --jq ".jobs[] | select(.name == \"$job\") | .conclusion")
+            echo "Conclusion of $job: $conclusion"
+            if [ "$conclusion" != skipped ]; then
+              status=1
+            fi
+          done
+          exit "$status"
