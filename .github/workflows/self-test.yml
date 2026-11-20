@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ["v*-rc.*"]
 
 permissions:
   contents: read # No write scope
@@ -76,6 +77,39 @@ jobs:
     uses: ./.github/workflows/compose.yml
     with:
       working-directory: testdata/compose/pass
+
+  image-pass:
+    uses: ./.github/workflows/image.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      context: testdata/image/pass
+      push: false
+      platforms: ${{ vars.SELF_TEST_LOCAL == 'true' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+
+  image-push-guard:
+    # A tag run pushes in image-push-rc. This job must not push on a tag.
+    if: github.ref_type != 'tag'
+    uses: ./.github/workflows/image.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      context: testdata/image/pass
+      push: true
+      platforms: linux/amd64
+
+  image-push-rc:
+    if: startsWith(github.ref, 'refs/tags/v') && contains(github.ref, '-rc.')
+    uses: ./.github/workflows/image.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      context: testdata/image/pass
+      image-name: techorionai/constellation-ci-selftest
+      push: true
 
   check-repo:
     runs-on: ubuntu-latest
@@ -174,6 +208,8 @@ jobs:
       - frontend-pnpm
       - compose-pass
       - compose-no-integration
+      - image-pass
+      - image-push-guard
       - check-repo
       - must-fail
     runs-on: ubuntu-latest
@@ -186,12 +222,16 @@ jobs:
       REPO: ${{ github.repository }}
       RUN_ID: ${{ github.run_id }}
       RUN_ATTEMPT: ${{ github.run_attempt }}
+      REF_TYPE: ${{ github.ref_type }}
     steps:
       - name: Check the results of all jobs
         run: |
           status=0
           while IFS=$'	' read -r name result; do
             if [ "$result" = success ]; then
+              continue
+            fi
+            if [ "$result" = skipped ] && [ "$name" = image-push-guard ] && [ "$REF_TYPE" = tag ]; then
               continue
             fi
             if [ "$result" = skipped ] && [ "$name" = must-fail ] && [ "$SELF_TEST_LOCAL" = true ]; then
