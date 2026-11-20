@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run the caller workflows in a folder with act. Each caller must fail at the job and step
 # that its header line names: "# expect-fail: <job>/<step>".
+# An optional second header line "# act-event: <event> <file>" runs the caller with that event.
 # Usage: scripts/self-test.sh <folder>
 set -euo pipefail
 
@@ -40,9 +41,18 @@ for caller in "$folder"/*.yml; do
     continue
   fi
 
+  # An optional header "# act-event: <event> <file>" sets the event name and the event file.
+  event=pull_request
+  event_args=()
+  event_header=$(sed -n 's/^# act-event: //p' "$caller" | head -n 1)
+  if [ -n "$event_header" ]; then
+    event=${event_header%% *}
+    event_args=(-e "${event_header#* }")
+  fi
+
   log="$log_dir/$name.log"
   code=0
-  gh act pull_request -W "$caller" > "$log" 2>&1 || code=$?
+  gh act "$event" ${event_args[@]+"${event_args[@]}"} -W "$caller" > "$log" 2>&1 || code=$?
 
   if [ "$code" -eq 0 ]; then
     echo "FAIL  $name: no failure (expected $job/$step)"
