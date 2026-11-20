@@ -12,7 +12,7 @@ This repository has GitHub reusable workflows for the Constellation repositories
 | `compose.yml` | Repositories with Docker Compose files. YAML lint, shell lint, workflow lint, static checks, and a smoke test. |
 | `image.yml` | Container images of Go services. A Buildx build for `linux/amd64` and `linux/arm64`, and a push to GHCR on a version tag. |
 
-Each workflow has the permission `contents: read`. The exception is the `build` job of `image.yml`, which also has `packages: write`. No workflow accepts secrets. No workflow has outputs.
+Each workflow has the permission `contents: read`. The exception is the `publish` job of `image.yml`, which also has `packages: write`. No workflow accepts secrets. No workflow has outputs.
 
 ## Go workflow
 
@@ -24,7 +24,7 @@ Each workflow has the permission `contents: read`. The exception is the `build` 
 | `integration-command` | empty | Integration test command. If the input is empty, the `integration` job is skipped. |
 | `integration-timeout-minutes` | `30` | Time limit of the `integration` job in minutes. |
 
-Each job has a time limit (`timeout-minutes`): `lint` 15, `unit` 30, `integration` 30 (set by the input), and `vulncheck` 15. The TypeSpec workflow has 15 and the frontend workflow has 30. The Compose workflow has `lint` 15, `unit` 15, and `integration` 30 (set by the input). The image workflow has `build` 45.
+Each job has a time limit (`timeout-minutes`): `lint` 15, `unit` 30, `integration` 30 (set by the input), and `vulncheck` 15. The TypeSpec workflow has 15 and the frontend workflow has 30. The Compose workflow has `lint` 15, `unit` 15, and `integration` 30 (set by the input). The image workflow has `resolve` 10, `build` 45, and `publish` 45.
 
 Jobs:
 
@@ -158,7 +158,7 @@ jobs:
 
 ## Image workflow
 
-For Go services that ship as a container image. The workflow builds the image with Docker Buildx for the platforms of the input. On a version tag, it pushes the image to GitHub Container Registry (GHCR) with an SBOM and a provenance attestation.
+For Go services that ship as a container image. The workflow builds the image with Docker Buildx for the platforms of the input. On a full version tag, it pushes the image to GitHub Container Registry (GHCR) with an SBOM and a provenance attestation.
 
 | Input | Default | Use |
 | ----- | ------- | --- |
@@ -170,9 +170,13 @@ For Go services that ship as a container image. The workflow builds the image wi
 
 Rules:
 
-- Push rule: the workflow pushes only if the `push` input is true and `github.ref` starts with `refs/tags/v`. On a pull request or a branch, the workflow builds and does not push, also if the caller sets `push: true`. The `Resolve` step writes the result `push=true` or `push=false` to the job summary.
-- Permission rule: the caller job must have the permissions `contents: read` and `packages: write`. A called workflow cannot get more permissions than its caller. Do not give `id-token: write`. The workflow does not need it. `scripts/check-repo.sh` allows `packages: write` only in the `build` job of `image.yml` and in a caller job of `image.yml`. Any other write permission fails the check.
-- Tag rule: the tags are `<version>`, `<major>.<minor>`, and `sha-<short sha>`. The workflow never makes a `latest` tag. The step `No latest tag` fails if a tag ends in `:latest`.
+- Push rule: the workflow pushes only if the `push` input is true and `github.ref` starts with `refs/tags/v`, and the tag rule below passes. On a pull request or a branch, the workflow builds and does not push, also if the caller sets `push: true`. The `Resolve` step writes the result `push=true` or `push=false` to the job summary.
+- Jobs: `resolve` checks the inputs and decides if the run pushes. Then exactly one of `build` and `publish` runs. `build` is for a run that does not push. It has the permission `contents: read` only and it does not log in. `publish` is for a push run. It has `packages: write`, logs in to GHCR, and builds once with the push. The `publish` build does not use the build cache.
+- Input rule: `context` and `dockerfile` have only the characters `A-Z a-z 0-9 . _ / -`. They are relative paths with no `..` part. The workflow changes `image-name` to lowercase and checks it in the same way. Other values fail the `Resolve` step.
+- Tag rule for a push: the tag must be a full version, `vX.Y.Z` or `vX.Y.Z-rc.N`. The commit of the tag must be on `main`. If one check fails, the `Resolve` step fails before the login. The workflow does not check for an existing version in the registry. Thus a second tag on a new commit of `main` with the same version can overwrite the version tags of the image.
+- Helper images: the QEMU and Buildx helper images are pinned by digest in `image.yml`.
+- Permission rule: the caller job must have the permissions `contents: read` and `packages: write`. A called workflow cannot get more permissions than its caller. Do not give `id-token: write`. The workflow does not need it. `scripts/check-repo.sh` allows `packages: write` in a caller job of `image.yml`. It allows `packages: write` in the `publish` job of `.github/workflows/image.yml` only if the script runs with the option `--constellation-ci`. Only the CI of this repository uses the option. In another repository, a job in a file with that path gets no exception. Any other write permission fails the check.
+- Image tags: the tags are `<version>`, `<major>.<minor>`, and `sha-<short sha>`. The workflow never makes a `latest` tag. The step `No latest tag` fails if a tag ends in `:latest`.
 - Dockerfile cross-compile rule: the `arm64` build runs under QEMU and is slow. Thus compile Go on the build platform. Use `FROM --platform=$BUILDPLATFORM` for the build stage and set `GOARCH=$TARGETARCH`. Then QEMU runs only the final stage.
 - GHCR visibility: a new GHCR package is private. After the first push, the owner sets the package to public in the package settings on GitHub.
 - The workflow does not scan the image and does not sign it. It makes no GitHub artifact attestation.
@@ -213,9 +217,9 @@ The tests need Docker, `actionlint`, and the `gh-act` extension of `gh`.
 
 ```sh
 actionlint
-scripts/check-repo.sh .
+scripts/check-repo.sh --constellation-ci .
 scripts/self-test.sh testdata/callers
 gh act pull_request -W .github/workflows/self-test.yml --var SELF_TEST_LOCAL=true
 ```
 
-`scripts/self-test.sh` runs each caller in a folder with `act`. A caller must fail at the job and step that its `# expect-fail: <job>/<step>` header names. The `.actrc` file sets the runner image and runs one job at a time, because parallel jobs of `act` share one tool cache.
+`scripts/self-test.sh` runs each caller in a folder with `act`. A caller must fail at the job and step that its `# expect-fail: <job>/<step>` header names. The `.actrc` file sets the runner image and runs one job at a time, because parallel jobs of `act` share one tool cache. A caller can have a second header line `# act-event: <event> <file>` to run with an event file. In CI, the step sets `GH_TOKEN` to the token of the workflow, because `act` gives an empty token to the actions otherwise, and the metadata-action step then fails with "Bad credentials".
