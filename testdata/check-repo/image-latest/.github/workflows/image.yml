@@ -1,0 +1,140 @@
+name: Image
+
+on:
+  workflow_call:
+    inputs:
+      context:
+        description: Build context folder
+        type: string
+        default: .
+      dockerfile:
+        description: Path of the Dockerfile, relative to the repository root. Empty means the Dockerfile in the context folder.
+        type: string
+        default: ""
+      image-name:
+        description: Image name without registry. Empty means the repository name in lowercase.
+        type: string
+        default: ""
+      platforms:
+        description: Buildx platforms
+        type: string
+        default: linux/amd64,linux/arm64
+      push:
+        description: Push the image to ghcr.io. The workflow pushes only on a v* tag.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Resolve
+        id: resolve
+        env:
+          INPUT_CONTEXT: ${{ inputs.context }}
+          INPUT_DOCKERFILE: ${{ inputs.dockerfile }}
+          INPUT_IMAGE_NAME: ${{ inputs.image-name }}
+          INPUT_PUSH: ${{ inputs.push }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ -n "$INPUT_IMAGE_NAME" ]; then
+            image="ghcr.io/$INPUT_IMAGE_NAME"
+          else
+            image="ghcr.io/${REPOSITORY,,}"
+          fi
+          if [ -n "$INPUT_DOCKERFILE" ]; then
+            dockerfile="$INPUT_DOCKERFILE"
+          else
+            dockerfile="$INPUT_CONTEXT/Dockerfile"
+          fi
+          push=false
+          case "$REF" in
+            refs/tags/v*)
+              if [ "$INPUT_PUSH" = true ]; then
+                push=true
+              fi
+              ;;
+          esac
+          {
+            echo "image=$image"
+            echo "dockerfile=$dockerfile"
+            echo "push=$push"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Image build"
+            echo "- image=$image"
+            echo "- dockerfile=$dockerfile"
+            echo "- push=$push"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Log in to GHCR
+        if: steps.resolve.outputs.push == 'true'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ steps.resolve.outputs.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+      - name: No latest tag
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          while IFS= read -r tag; do
+            echo "tag $tag"
+            case "$tag" in
+              *:latest)
+                echo "A latest tag is not allowed." >&2
+                exit 1
+                ;;
+            esac
+          done <<< "$TAGS"
+      - name: Build
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ steps.resolve.outputs.dockerfile }}
+          platforms: ${{ inputs.platforms }}
+          push: ${{ steps.resolve.outputs.push == 'true' }}
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Image digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          {
+            echo "### Image result"
+            echo "- digest=$DIGEST"
+            echo "- tags:"
+            while IFS= read -r tag; do
+              echo "  - $tag"
+            done <<< "$TAGS"
+          } >> "$GITHUB_STEP_SUMMARY"

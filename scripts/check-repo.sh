@@ -44,15 +44,36 @@ for file in $workflows; do
   fi
 
   # No write permission at the top level or in a job. Comments do not count.
+  # One exception: packages: write is allowed in the job build of .github/workflows/image.yml
+  # and in a caller job of image.yml. Any other write permission in these jobs still fails.
+  rel=${file#"$root"/}
   while IFS= read -r entry; do
     [ -n "$entry" ] || continue
     fail "$file:${entry%%:*}: ${entry#*:} permissions have a write permission"
-  done < <(awk '
+  done < <(awk -v rel="$rel" '
+    function finish(   n, i, lines) {
+      if (pend != "" && !allowed) {
+        n = split(pend, lines, " ")
+        for (i = 1; i <= n; i++) print lines[i] ":job-level"
+      }
+      pend = ""
+    }
     {
       line = $0
       sub(/#.*/, "", line)
       gsub(/["\047]/, "", line)
       match(line, /^ */); ind = RLENGTH
+      if (line ~ /^[^ ]/) { if (injobs) finish(); injobs = (line ~ /^jobs:/); job = ""; uses = ""; allowed = 0 }
+      if (injobs && line ~ /^  [A-Za-z_][A-Za-z0-9_-]*:/) {
+        finish()
+        job = line; sub(/^  /, "", job); sub(/:.*/, "", job)
+        uses = ""
+        allowed = (job == "build" && rel == ".github/workflows/image.yml")
+      }
+      if (injobs && ind == 4 && line ~ /^ *uses:/) {
+        uses = line; sub(/^ *uses: */, "", uses); sub(/ +$/, "", uses)
+        if (uses == "./.github/workflows/image.yml" || uses ~ /^techorionai\/constellation-ci\/\.github\/workflows\/image\.yml@[^ ]+$/) allowed = 1
+      }
       if (inb && line !~ /^ *$/ && ind <= pind) inb = 0
       if (line ~ /^ *permissions:/) {
         pind = ind; inb = 1
@@ -63,8 +84,28 @@ for file in $workflows; do
       } else {
         next
       }
-      if (chk ~ /(^|[ :{,])write(-all)?([ ,}]|$)/) print NR ":" level
-    }' "$file")
+      if (chk ~ /(^|[ :{,])write(-all)?([ ,}]|$)/) {
+        rest = chk
+        gsub(/packages: *write/, "", rest)
+        if (level == "job-level" && injobs && rest !~ /(^|[ :{,])write(-all)?([ ,}]|$)/) pend = pend " " NR
+        else print NR ":" level
+      }
+    }
+    END { if (injobs) finish() }' "$file")
+
+  # The metadata step of image.yml must set latest=false, and the step No latest tag must exist.
+  if [ "$(basename "$file")" = image.yml ] && grep -q 'docker/metadata-action@' "$file"; then
+    if ! awk '
+      /^ *- name:/ { inmeta = 0 }
+      /uses: *docker\/metadata-action@/ { inmeta = 1 }
+      inmeta && /latest=false/ { found = 1 }
+      END { exit found ? 0 : 1 }' "$file"; then
+      fail "$file: the metadata-action step has no 'latest=false' flavor"
+    fi
+    if ! grep -qE '^ *- name: No latest tag$' "$file"; then
+      fail "$file: no step named 'No latest tag'"
+    fi
+  fi
 
   # Each checkout step has persist-credentials: false.
   missing=$(awk '
