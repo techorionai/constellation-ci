@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 # Static checks of the workflows in a folder. The folder has a .github/workflows/ folder.
-# Usage: scripts/check-repo.sh <folder>
+# Usage: scripts/check-repo.sh [--constellation-ci] <folder>
+# The option --constellation-ci is for the CI of the constellation-ci repository only.
+# With the option, the job publish of .github/workflows/image.yml may have packages: write.
 # The checks assume 2 spaces of indentation in the workflow files.
 set -uo pipefail
 
+constellation_ci=0
+if [ "${1:-}" = "--constellation-ci" ]; then
+  constellation_ci=1
+  shift
+fi
+
 if [ "$#" -ne 1 ] || [ ! -d "$1/.github/workflows" ]; then
-  echo "Usage: $0 <folder with .github/workflows>" >&2
+  echo "Usage: $0 [--constellation-ci] <folder with .github/workflows>" >&2
   exit 2
 fi
 
@@ -44,15 +52,37 @@ for file in $workflows; do
   fi
 
   # No write permission at the top level or in a job. Comments do not count.
+  # Two exceptions for packages: write. The job publish of .github/workflows/image.yml, only
+  # with the option --constellation-ci. A caller job of image.yml, always.
+  # Any other write permission in these jobs still fails.
+  rel=${file#"$root"/}
   while IFS= read -r entry; do
     [ -n "$entry" ] || continue
     fail "$file:${entry%%:*}: ${entry#*:} permissions have a write permission"
-  done < <(awk '
+  done < <(awk -v rel="$rel" -v cio="$constellation_ci" '
+    function finish(   n, i, lines) {
+      if (pend != "" && !allowed) {
+        n = split(pend, lines, " ")
+        for (i = 1; i <= n; i++) print lines[i] ":job-level"
+      }
+      pend = ""
+    }
     {
       line = $0
       sub(/#.*/, "", line)
       gsub(/["\047]/, "", line)
       match(line, /^ */); ind = RLENGTH
+      if (line ~ /^[^ ]/) { if (injobs) finish(); injobs = (line ~ /^jobs:/); job = ""; uses = ""; allowed = 0 }
+      if (injobs && line ~ /^  [A-Za-z_][A-Za-z0-9_-]*:/) {
+        finish()
+        job = line; sub(/^  /, "", job); sub(/:.*/, "", job)
+        uses = ""
+        allowed = (job == "publish" && rel == ".github/workflows/image.yml" && cio == 1)
+      }
+      if (injobs && ind == 4 && line ~ /^ *uses:/) {
+        uses = line; sub(/^ *uses: */, "", uses); sub(/ +$/, "", uses)
+        if (uses == "./.github/workflows/image.yml" || uses ~ /^techorionai\/constellation-ci\/\.github\/workflows\/image\.yml@[^ ]+$/) allowed = 1
+      }
       if (inb && line !~ /^ *$/ && ind <= pind) inb = 0
       if (line ~ /^ *permissions:/) {
         pind = ind; inb = 1
@@ -63,8 +93,51 @@ for file in $workflows; do
       } else {
         next
       }
-      if (chk ~ /(^|[ :{,])write(-all)?([ ,}]|$)/) print NR ":" level
-    }' "$file")
+      if (chk ~ /(^|[ :{,])write(-all)?([ ,}]|$)/) {
+        rest = chk
+        gsub(/packages: *write/, "", rest)
+        if (level == "job-level" && injobs && rest !~ /(^|[ :{,])write(-all)?([ ,}]|$)/) pend = pend " " NR
+        else print NR ":" level
+      }
+    }
+    END { if (injobs) finish() }' "$file")
+
+  # In image.yml, each job with a metadata step must set latest=false in that step,
+  # and must have the step No latest tag. Comments do not count.
+  if [ "$(basename "$file")" = image.yml ] && grep -q 'docker/metadata-action@' "$file"; then
+    while IFS= read -r problem; do
+      fail "$file: $problem"
+    done < <(awk '
+      function finish() {
+        if (job != "" && metas > 0) {
+          if (flavors < metas) print "the metadata-action step has no \047latest=false\047 flavor (job " job ")"
+          if (!nolatest) print "no step named \047No latest tag\047 (job " job ")"
+        }
+      }
+      { line = $0; sub(/#.*/, "", line) }
+      /^[^ #]/ { if (injobs) finish(); injobs = ($0 ~ /^jobs:/); job = ""; next }
+      !injobs { next }
+      line ~ /^  [A-Za-z_][A-Za-z0-9_-]*:/ { finish(); job = line; sub(/^  /, "", job); sub(/:.*/, "", job); metas = 0; flavors = 0; nolatest = 0; inmeta = 0; next }
+      line ~ /^ *- name:/ { inmeta = 0 }
+      line ~ /^ *- name: No latest tag$/ { nolatest = 1 }
+      line ~ /uses: *docker\/metadata-action@/ { inmeta = 1; metas++ }
+      inmeta && line ~ /latest=false/ { flavors++; inmeta = 0 }
+      END { if (injobs) finish() }' "$file")
+  fi
+
+  # In image.yml, the step Resolve must check the tag format and that the commit is on main.
+  if [ "$(basename "$file")" = image.yml ] && grep -qE '^ *- name: Resolve$' "$file"; then
+    resolve=$(awk '
+      { line = $0; sub(/#.*/, "", line) }
+      line ~ /^ *- name:/ { inr = (line ~ /^ *- name: Resolve$/) }
+      inr { print line }' "$file")
+    if ! grep -qF '^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$' <<< "$resolve"; then
+      fail "$file: the step Resolve has no tag format check"
+    fi
+    if ! grep -qF 'merge-base --is-ancestor' <<< "$resolve"; then
+      fail "$file: the step Resolve has no check that the commit is on main"
+    fi
+  fi
 
   # Each checkout step has persist-credentials: false.
   missing=$(awk '

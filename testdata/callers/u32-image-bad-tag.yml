@@ -1,0 +1,16 @@
+# expect-fail: resolve/Resolve
+# act-event: push testdata/image/bad-tag-event.json
+name: u32-image-bad-tag
+on: push
+permissions:
+  contents: read
+jobs:
+  image:
+    uses: ./.github/workflows/image.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      context: testdata/image/pass
+      push: true
+      platforms: linux/amd64

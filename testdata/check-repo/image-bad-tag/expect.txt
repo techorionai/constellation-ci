@@ -1,0 +1,1 @@
+the step Resolve has no tag format check

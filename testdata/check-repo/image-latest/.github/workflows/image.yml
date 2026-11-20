@@ -1,0 +1,259 @@
+name: Image
+
+on:
+  workflow_call:
+    inputs:
+      context:
+        description: Build context folder
+        type: string
+        default: .
+      dockerfile:
+        description: Path of the Dockerfile, relative to the repository root. Empty means the Dockerfile in the context folder.
+        type: string
+        default: ""
+      image-name:
+        description: Image name without registry. Empty means the repository name in lowercase.
+        type: string
+        default: ""
+      platforms:
+        description: Buildx platforms
+        type: string
+        default: linux/amd64,linux/arm64
+      push:
+        description: Push the image to ghcr.io. The workflow pushes only on a full version tag whose commit is on main.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      image: ${{ steps.resolve.outputs.image }}
+      dockerfile: ${{ steps.resolve.outputs.dockerfile }}
+      push: ${{ steps.resolve.outputs.push }}
+      cache-scope: ${{ steps.resolve.outputs.cache-scope }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Resolve
+        id: resolve
+        env:
+          INPUT_CONTEXT: ${{ inputs.context }}
+          INPUT_DOCKERFILE: ${{ inputs.dockerfile }}
+          INPUT_IMAGE_NAME: ${{ inputs.image-name }}
+          INPUT_PUSH: ${{ inputs.push }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          fail() {
+            echo "$1" >&2
+            exit 1
+          }
+          # A path input has only the characters A-Z a-z 0-9 . _ / - and no .. part.
+          check_path() {
+            if [[ ! "$2" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+              fail "The input $1 has a character that is not allowed."
+            fi
+            if [[ "$2" == /* ]] || [[ "$2" =~ (^|/)\.\.(/|$) ]]; then
+              fail "The input $1 must be a relative path with no .. part."
+            fi
+          }
+          check_path context "$INPUT_CONTEXT"
+          if [ -n "$INPUT_DOCKERFILE" ]; then
+            check_path dockerfile "$INPUT_DOCKERFILE"
+            dockerfile="$INPUT_DOCKERFILE"
+          else
+            dockerfile="$INPUT_CONTEXT/Dockerfile"
+          fi
+          if [ -n "$INPUT_IMAGE_NAME" ]; then
+            name="${INPUT_IMAGE_NAME,,}"
+            if [[ ! "$name" =~ ^[a-z0-9._/-]+$ ]]; then
+              fail "The input image-name has a character that is not allowed."
+            fi
+          else
+            name="${REPOSITORY,,}"
+          fi
+          image="ghcr.io/$name"
+          push=false
+          case "$REF" in
+            refs/tags/v*)
+              if [ "$INPUT_PUSH" = true ]; then
+                push=true
+              fi
+              ;;
+          esac
+          if [ "$push" = true ]; then
+            tag="${REF#refs/tags/}"
+            if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+              fail "The tag $tag is not a full version (vX.Y.Z or vX.Y.Z-rc.N)."
+            fi
+            if ! git merge-base --is-ancestor "$COMMIT" origin/main; then
+              fail "The commit of the tag $tag is not on main."
+            fi
+          fi
+          scope="${image//[^a-z0-9._-]/-}"
+          {
+            echo "image=$image"
+            echo "dockerfile=$dockerfile"
+            echo "push=$push"
+            echo "cache-scope=$scope"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Image build"
+            echo "- image=$image"
+            echo "- dockerfile=$dockerfile"
+            echo "- push=$push"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.push == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          image: tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=moby/buildkit@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ needs.resolve.outputs.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+      - name: No latest tag
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          while IFS= read -r tag; do
+            echo "tag $tag"
+            case "$tag" in
+              *:latest)
+                echo "A latest tag is not allowed." >&2
+                exit 1
+                ;;
+            esac
+          done <<< "$TAGS"
+      - name: Build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ needs.resolve.outputs.dockerfile }}
+          platforms: ${{ inputs.platforms }}
+          push: false
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ needs.resolve.outputs.cache-scope }}
+          cache-to: type=gha,mode=max,scope=${{ needs.resolve.outputs.cache-scope }}
+      - name: Image tags
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          {
+            echo "### Image result"
+            echo "- tags:"
+            while IFS= read -r tag; do
+              echo "  - $tag"
+            done <<< "$TAGS"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    needs: resolve
+    if: needs.resolve.outputs.push == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          image: tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=moby/buildkit@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ needs.resolve.outputs.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+      - name: No latest tag
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          while IFS= read -r tag; do
+            echo "tag $tag"
+            case "$tag" in
+              *:latest)
+                echo "A latest tag is not allowed." >&2
+                exit 1
+                ;;
+            esac
+          done <<< "$TAGS"
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # The push build reads and writes no cache, so that a release build does not use a cached layer.
+      - name: Build
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ needs.resolve.outputs.dockerfile }}
+          platforms: ${{ inputs.platforms }}
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+      - name: Image digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          {
+            echo "### Image result"
+            echo "- digest=$DIGEST"
+            echo "- tags:"
+            while IFS= read -r tag; do
+              echo "  - $tag"
+            done <<< "$TAGS"
+          } >> "$GITHUB_STEP_SUMMARY"

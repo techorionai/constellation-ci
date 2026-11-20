@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ["v*-rc.*"]
 
 permissions:
   contents: read # No write scope
@@ -77,6 +78,39 @@ jobs:
     with:
       working-directory: testdata/compose/pass
 
+  image-pass:
+    uses: ./.github/workflows/image.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      context: testdata/image/pass
+      push: false
+      platforms: ${{ vars.SELF_TEST_LOCAL == 'true' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+
+  image-push-guard:
+    # A tag run pushes in image-push-rc. This job must not push on a tag.
+    if: github.ref_type != 'tag'
+    uses: ./.github/workflows/image.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      context: testdata/image/pass
+      push: true
+      platforms: linux/amd64
+
+  image-push-rc:
+    if: startsWith(github.ref, 'refs/tags/v') && contains(github.ref, '-rc.')
+    uses: ./.github/workflows/image.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      context: testdata/image/pass
+      image-name: techorionai/constellation-ci-selftest
+      push: true
+
   check-repo:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -95,11 +129,14 @@ jobs:
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Check this repository
-        run: bash scripts/check-repo.sh .
+        run: bash scripts/check-repo.sh --constellation-ci .
       - name: Check the good fixtures
         run: |
           for dir in testdata/check-repo-pass/*/; do
-            bash scripts/check-repo.sh "${dir%/}"
+            args=""
+            [ -f "${dir}args.txt" ] && args=$(cat "${dir}args.txt")
+            # shellcheck disable=SC2086
+            bash scripts/check-repo.sh $args "${dir%/}"
           done
       - name: Check the bad fixtures
         run: |
@@ -107,7 +144,10 @@ jobs:
           for dir in testdata/check-repo/*/; do
             dir=${dir%/}
             code=0
-            output=$(bash scripts/check-repo.sh "$dir" 2>&1) || code=$?
+            args=""
+            [ -f "$dir/args.txt" ] && args=$(cat "$dir/args.txt")
+            # shellcheck disable=SC2086
+            output=$(bash scripts/check-repo.sh $args "$dir" 2>&1) || code=$?
             if [ "$code" -eq 0 ]; then
               echo "FAIL  $dir: the script passed, but it must fail"
               status=1
@@ -145,8 +185,14 @@ jobs:
           chmod +x "$dir/gh-act"
           (cd "$dir" && gh extension install .)
       - name: Run the cases that must fail
+        env:
+          # act passes this read-only token to the actions. An empty token gives "Bad credentials"
+          # in the metadata-action step of the image workflow.
+          GH_TOKEN: ${{ github.token }}
         run: bash scripts/self-test.sh testdata/callers
       - name: Check that a wrong step is found
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           code=0
           output=$(bash scripts/self-test.sh testdata/self-test-wrong-step 2>&1) || code=$?
@@ -174,6 +220,9 @@ jobs:
       - frontend-pnpm
       - compose-pass
       - compose-no-integration
+      - image-pass
+      - image-push-guard
+      - image-push-rc
       - check-repo
       - must-fail
     runs-on: ubuntu-latest
@@ -186,6 +235,8 @@ jobs:
       REPO: ${{ github.repository }}
       RUN_ID: ${{ github.run_id }}
       RUN_ATTEMPT: ${{ github.run_attempt }}
+      REF_TYPE: ${{ github.ref_type }}
+      REF: ${{ github.ref }}
     steps:
       - name: Check the results of all jobs
         run: |
@@ -193,6 +244,15 @@ jobs:
           while IFS=$'	' read -r name result; do
             if [ "$result" = success ]; then
               continue
+            fi
+            if [ "$result" = skipped ] && [ "$name" = image-push-guard ] && [ "$REF_TYPE" = tag ]; then
+              continue
+            fi
+            if [ "$result" = skipped ] && [ "$name" = image-push-rc ]; then
+              case "$REF" in
+                refs/tags/v*-rc.*) ;;
+                *) continue ;;
+              esac
             fi
             if [ "$result" = skipped ] && [ "$name" = must-fail ] && [ "$SELF_TEST_LOCAL" = true ]; then
               continue
@@ -212,4 +272,29 @@ jobs:
               status=1
             fi
           done
+          exit "$status"
+      - name: Check that no image is pushed by the guard jobs
+        if: env.SELF_TEST_LOCAL != 'true'
+        run: |
+          # The job publish is the only job that logs in and pushes. It must be skipped here.
+          jobs="image-pass / publish"
+          if [ "$REF_TYPE" != tag ]; then
+            jobs="$jobs|image-push-guard / publish"
+          fi
+          status=0
+          IFS='|' read -r -a names <<< "$jobs"
+          for job in "${names[@]}"; do
+            conclusion=$(gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs" --paginate --jq ".jobs[] | select(.name == \"$job\") | .conclusion")
+            echo "Conclusion of $job: $conclusion"
+            if [ "$conclusion" != skipped ]; then
+              status=1
+            fi
+          done
+          if [ "$REF_TYPE" != tag ]; then
+            conclusion=$(gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs" --paginate --jq ".jobs[] | select(.name == \"image-push-guard / build\") | .conclusion")
+            echo "Conclusion of image-push-guard / build: $conclusion"
+            if [ "$conclusion" != success ]; then
+              status=1
+            fi
+          fi
           exit "$status"

@@ -1,0 +1,14 @@
+# expect-fail: build/Build
+name: u31-image-dockerfile-fail
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  image:
+    uses: ./.github/workflows/image.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      context: testdata/image/dockerfile-fail
+      platforms: linux/amd64

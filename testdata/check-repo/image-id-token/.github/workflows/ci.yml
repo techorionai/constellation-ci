@@ -1,0 +1,11 @@
+name: Image
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  image:
+    uses: ./.github/workflows/image.yml
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
