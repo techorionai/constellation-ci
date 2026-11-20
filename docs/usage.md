@@ -10,8 +10,9 @@ This repository has GitHub reusable workflows for the Constellation repositories
 | `typespec.yml` | TypeSpec projects. Compile, and a check that the generated files are current. |
 | `frontend.yml` | Frontend projects. Install, lint, test, and build. |
 | `compose.yml` | Repositories with Docker Compose files. YAML lint, shell lint, workflow lint, static checks, and a smoke test. |
+| `image.yml` | Container images of Go services. A Buildx build for `linux/amd64` and `linux/arm64`, and a push to GHCR on a version tag. |
 
-Each workflow has the permission `contents: read`. No workflow accepts secrets. No workflow has outputs.
+Each workflow has the permission `contents: read`. The exception is the `build` job of `image.yml`, which also has `packages: write`. No workflow accepts secrets. No workflow has outputs.
 
 ## Go workflow
 
@@ -23,7 +24,7 @@ Each workflow has the permission `contents: read`. No workflow accepts secrets. 
 | `integration-command` | empty | Integration test command. If the input is empty, the `integration` job is skipped. |
 | `integration-timeout-minutes` | `30` | Time limit of the `integration` job in minutes. |
 
-Each job has a time limit (`timeout-minutes`): `lint` 15, `unit` 30, `integration` 30 (set by the input), and `vulncheck` 15. The TypeSpec workflow has 15 and the frontend workflow has 30. The Compose workflow has `lint` 15, `unit` 15, and `integration` 30 (set by the input).
+Each job has a time limit (`timeout-minutes`): `lint` 15, `unit` 30, `integration` 30 (set by the input), and `vulncheck` 15. The TypeSpec workflow has 15 and the frontend workflow has 30. The Compose workflow has `lint` 15, `unit` 15, and `integration` 30 (set by the input). The image workflow has `build` 45.
 
 Jobs:
 
@@ -153,6 +154,45 @@ jobs:
     uses: techorionai/constellation-ci/.github/workflows/compose.yml@v0.2.0
     with:
       integration-command: bash scripts/smoke-test.sh
+```
+
+## Image workflow
+
+For Go services that ship as a container image. The workflow builds the image with Docker Buildx for the platforms of the input. On a version tag, it pushes the image to GitHub Container Registry (GHCR) with an SBOM and a provenance attestation.
+
+| Input | Default | Use |
+| ----- | ------- | --- |
+| `context` | `.` | Build context folder. |
+| `dockerfile` | empty | Path of the Dockerfile, relative to the repository root. If the input is empty, the workflow uses `<context>/Dockerfile`. |
+| `image-name` | empty | Image name without the registry. If the input is empty, the workflow uses the repository name in lowercase, for example `techorionai/constellation-identity`. |
+| `platforms` | `linux/amd64,linux/arm64` | Buildx platforms. |
+| `push` | `false` | Push the image to `ghcr.io`. |
+
+Rules:
+
+- Push rule: the workflow pushes only if the `push` input is true and `github.ref` starts with `refs/tags/v`. On a pull request or a branch, the workflow builds and does not push, also if the caller sets `push: true`. The `Resolve` step writes the result `push=true` or `push=false` to the job summary.
+- Permission rule: the caller job must have the permissions `contents: read` and `packages: write`. A called workflow cannot get more permissions than its caller. Do not give `id-token: write`. The workflow does not need it. `scripts/check-repo.sh` allows `packages: write` only in the `build` job of `image.yml` and in a caller job of `image.yml`. Any other write permission fails the check.
+- Tag rule: the tags are `<version>`, `<major>.<minor>`, and `sha-<short sha>`. The workflow never makes a `latest` tag. The step `No latest tag` fails if a tag ends in `:latest`.
+- Dockerfile cross-compile rule: the `arm64` build runs under QEMU and is slow. Thus compile Go on the build platform. Use `FROM --platform=$BUILDPLATFORM` for the build stage and set `GOARCH=$TARGETARCH`. Then QEMU runs only the final stage.
+- GHCR visibility: a new GHCR package is private. After the first push, the owner sets the package to public in the package settings on GitHub.
+- The workflow does not scan the image and does not sign it. It makes no GitHub artifact attestation.
+
+```yaml
+name: Image
+on:
+  pull_request:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  image:
+    uses: techorionai/constellation-ci/.github/workflows/image.yml@v0.3.0
+    permissions:
+      contents: read
+      packages: write
+    with:
+      push: true
 ```
 
 ## Update to a new version
