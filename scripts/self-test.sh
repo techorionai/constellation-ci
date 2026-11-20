@@ -58,6 +58,8 @@ for caller in "$folder"/*.yml; do
   else
     echo "FAIL  $name: wrong step (expected $job/$step). Failure lines in the log:"
     grep -a 'Failure - ' "$log" | sed 's/^/        /' || true
+    echo "      Last 40 lines of the act log:"
+    tail -n 40 "$log" | sed 's/^/        /'
     failed=$((failed + 1))
   fi
 done
