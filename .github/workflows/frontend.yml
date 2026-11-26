@@ -11,6 +11,14 @@ on:
         description: Node.js version
         type: string
         default: "26"
+      integration-command:
+        description: Integration test command. Empty means no integration job.
+        type: string
+        default: ""
+      integration-timeout-minutes:
+        description: Time limit of the integration job in minutes
+        type: number
+        default: 30
 
 permissions:
   contents: read
@@ -88,3 +96,62 @@ jobs:
         env:
           MANAGER: ${{ steps.lock.outputs.manager }}
         run: $MANAGER run build
+
+  integration:
+    if: inputs.integration-command != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.integration-timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check lock file
+        id: lock
+        run: |
+          npm_lock=false
+          pnpm_lock=false
+          [ -f package-lock.json ] && npm_lock=true
+          [ -f pnpm-lock.yaml ] && pnpm_lock=true
+          if [ "$npm_lock" = true ] && [ "$pnpm_lock" = true ]; then
+            echo "The folder has two lock files."
+            exit 1
+          elif [ "$npm_lock" = true ]; then
+            echo "manager=npm" >> "$GITHUB_OUTPUT"
+          elif [ "$pnpm_lock" = true ]; then
+            echo "manager=pnpm" >> "$GITHUB_OUTPUT"
+          else
+            echo "The folder has no lock file."
+            exit 1
+          fi
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+      - name: Set up package manager
+        if: steps.lock.outputs.manager == 'pnpm'
+        run: |
+          if ! node -e 'process.exit(String(require("./package.json").packageManager || "").startsWith("pnpm@") ? 0 : 1)'; then
+            echo "package.json has no pnpm packageManager field."
+            exit 1
+          fi
+          npm install --global corepack@0.36.0
+          corepack enable
+          pnpm --version
+      - name: Install
+        env:
+          MANAGER: ${{ steps.lock.outputs.manager }}
+        run: |
+          if [ "$MANAGER" = pnpm ]; then
+            pnpm install --frozen-lockfile
+          else
+            npm ci
+          fi
+      - name: Integration tests
+        env:
+          MANAGER: ${{ steps.lock.outputs.manager }}
+          INTEGRATION_COMMAND: ${{ inputs.integration-command }}
+        run: eval "$INTEGRATION_COMMAND"

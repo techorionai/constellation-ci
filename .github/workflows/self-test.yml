@@ -67,6 +67,13 @@ jobs:
     with:
       working-directory: testdata/frontend/pass-pnpm
 
+  frontend-integration:
+    uses: ./.github/workflows/frontend.yml
+    with:
+      working-directory: testdata/frontend/integration-pass
+      integration-command: npm run test:integration
+      integration-timeout-minutes: 10
+
   compose-pass:
     uses: ./.github/workflows/compose.yml
     with:
@@ -218,6 +225,7 @@ jobs:
       - typespec-no-gitignore
       - frontend-npm
       - frontend-pnpm
+      - frontend-integration
       - compose-pass
       - compose-no-integration
       - image-pass
@@ -265,7 +273,7 @@ jobs:
         if: env.SELF_TEST_LOCAL != 'true'
         run: |
           status=0
-          for job in "go-pass / integration" "compose-no-integration / integration"; do
+          for job in "go-pass / integration" "frontend-npm / integration" "compose-no-integration / integration"; do
             conclusion=$(gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs" --paginate --jq ".jobs[] | select(.name == \"$job\") | .conclusion")
             echo "Conclusion of $job: $conclusion"
             if [ "$conclusion" != skipped ]; then
