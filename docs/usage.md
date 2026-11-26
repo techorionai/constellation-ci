@@ -8,7 +8,7 @@ This repository has GitHub reusable workflows for the Constellation repositories
 | -------- | ------- |
 | `go.yml` | Go modules. Format check, `go vet`, `golangci-lint`, unit tests, integration tests, and `govulncheck`. |
 | `typespec.yml` | TypeSpec projects. Compile, and a check that the generated files are current. |
-| `frontend.yml` | Frontend projects. Install, lint, test, and build. |
+| `frontend.yml` | Frontend projects. Install, lint, test, build, and optional integration tests. |
 | `compose.yml` | Repositories with Docker Compose files. YAML lint, shell lint, workflow lint, static checks, and a smoke test. |
 | `image.yml` | Container images of Go services. A Buildx build for `linux/amd64` and `linux/arm64`, and a push to GHCR on a version tag. |
 
@@ -24,7 +24,7 @@ Each workflow has the permission `contents: read`. The exception is the `publish
 | `integration-command` | empty | Integration test command. If the input is empty, the `integration` job is skipped. |
 | `integration-timeout-minutes` | `30` | Time limit of the `integration` job in minutes. |
 
-Each job has a time limit (`timeout-minutes`): `lint` 15, `unit` 30, `integration` 30 (set by the input), and `vulncheck` 15. The TypeSpec workflow has 15 and the frontend workflow has 30. The Compose workflow has `lint` 15, `unit` 15, and `integration` 30 (set by the input). The image workflow has `resolve` 10, `build` 45, and `publish` 45.
+Each job has a time limit (`timeout-minutes`): `lint` 15, `unit` 30, `integration` 30 (set by the input), and `vulncheck` 15. The TypeSpec workflow has 15. The frontend workflow has `frontend` 30 and `integration` 30 (set by the input). The Compose workflow has `lint` 15, `unit` 15, and `integration` 30 (set by the input). The image workflow has `resolve` 10, `build` 45, and `publish` 45.
 
 Jobs:
 
@@ -66,6 +66,8 @@ jobs:
 | ----- | ------- | --- |
 | `working-directory` | `.` | Folder of the TypeSpec project. |
 | `node-version` | `26` | Node.js version. |
+| `integration-command` | empty | Integration test command. Empty means no `integration` job. |
+| `integration-timeout-minutes` | `30` | Time limit of the `integration` job in minutes. |
 | `generate-command` | `npx tsp compile .` | Command that makes the generated files. |
 
 The job runs `npm ci` and the `generate-command`. Then it runs `git status --porcelain` in the `working-directory`, and the `node_modules/` folder is excluded. The job fails if the output is not empty. Thus commit the generated files, and keep them current.
@@ -97,6 +99,8 @@ Rules for the frontend folder:
 - It has exactly one lock file. `package-lock.json` gives npm. `pnpm-lock.yaml` gives pnpm. No lock file, or two lock files, make the job fail.
 - `package.json` has the scripts `lint`, `test`, and `build`. If one script is missing, the job fails before the install.
 - For pnpm, `package.json` has a `packageManager` field, for example `"packageManager": "pnpm@12.18.0"`. The job uses corepack to get this version. If the field is missing, the job fails.
+- The `integration` job runs only if `integration-command` is not empty. It is a separate job, so a failed integration test does not hide the result of lint and unit tests. It installs the dependencies and runs the command with `eval`. The command can use `$MANAGER` (`npm` or `pnpm`).
+- The workflow does not install browsers. The caller puts the browser installation in its command.
 
 ```yaml
 name: CI
@@ -111,6 +115,23 @@ jobs:
     uses: techorionai/constellation-ci/.github/workflows/frontend.yml@v0.1.0
     with:
       working-directory: web
+```
+
+Example with integration tests that use Playwright:
+
+```yaml
+name: CI
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  frontend:
+    uses: techorionai/constellation-ci/.github/workflows/frontend.yml@v0.4.0
+    with:
+      working-directory: web
+      integration-command: npx playwright install --with-deps chromium && npm run test:integration
+      integration-timeout-minutes: 20
 ```
 
 ## Compose workflow
