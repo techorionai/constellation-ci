@@ -66,8 +66,6 @@ jobs:
 | ----- | ------- | --- |
 | `working-directory` | `.` | Folder of the TypeSpec project. |
 | `node-version` | `26` | Node.js version. |
-| `integration-command` | empty | Integration test command. Empty means no `integration` job. |
-| `integration-timeout-minutes` | `30` | Time limit of the `integration` job in minutes. |
 | `generate-command` | `npx tsp compile .` | Command that makes the generated files. |
 
 The job runs `npm ci` and the `generate-command`. Then it runs `git status --porcelain` in the `working-directory`, and the `node_modules/` folder is excluded. The job fails if the output is not empty. Thus commit the generated files, and keep them current.
@@ -93,6 +91,8 @@ jobs:
 | ----- | ------- | --- |
 | `working-directory` | `.` | Folder of the frontend. |
 | `node-version` | `26` | Node.js version. |
+| `integration-command` | empty | Integration test command. Empty means no `integration` job. |
+| `integration-timeout-minutes` | `30` | Time limit of the `integration` job in minutes. |
 
 Rules for the frontend folder:
 
